@@ -5,21 +5,21 @@ $InnoSetupPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
 $DistDir = "dist"
 $InstallerDir = "installer"
 
-Write-Host "Starting build process..." -ForegroundColor Green
+Write-Host "Starting build process." -ForegroundColor Green
 
 # Create directories if they don't exist
 if (-not (Test-Path $DistDir)) {
-    Write-Host "Creating distribution directory..." -ForegroundColor Yellow
+    Write-Host "Creating distribution directory." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $DistDir | Out-Null
 }
 
 if (-not (Test-Path $InstallerDir)) {
-    Write-Host "Creating installer directory..." -ForegroundColor Yellow
+    Write-Host "Creating installer directory." -ForegroundColor Yellow
     New-Item -ItemType Directory -Path $InstallerDir | Out-Null
 }
 
 # Compile the program using the existing batch file
-Write-Host "Compiling program..." -ForegroundColor Yellow
+Write-Host "Compiling program." -ForegroundColor Yellow
 & .\compile_countdown.bat
 
 if ($LASTEXITCODE -ne 0) {
@@ -28,7 +28,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Copy files to distribution directory
-Write-Host "Copying files to distribution directory..." -ForegroundColor Yellow
+Write-Host "Copying files to distribution directory." -ForegroundColor Yellow
 $files = @(
     "countdown.exe",
     "SDL2.dll",
@@ -50,7 +50,7 @@ foreach ($file in $files) {
 }
 
 # Create installer
-Write-Host "Creating installer..." -ForegroundColor Yellow
+Write-Host "Creating installer." -ForegroundColor Yellow
 if (Test-Path $InnoSetupPath) {
     & $InnoSetupPath setup.iss
     if ($LASTEXITCODE -eq 0) {
@@ -66,5 +66,5 @@ if (Test-Path $InnoSetupPath) {
     exit 1
 }
 
-Write-Host "`nBuild process completed!" -ForegroundColor Green
+Write-Host "\nBuild process completed!" -ForegroundColor Green
 Write-Host "You can find the installer at: $((Get-Item $InstallerDir).FullName)\CountdownTimer-Setup.exe" -ForegroundColor Cyan 

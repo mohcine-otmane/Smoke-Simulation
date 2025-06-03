@@ -5,13 +5,19 @@
 #include <time.h>
 #include <math.h>
 
-#define WINDOW_WIDTH 800
-#define WINDOW_HEIGHT 600
-#define GRID_WIDTH 100
-#define GRID_HEIGHT 75
-#define CELL_SIZE 8
+#define WINDOW_WIDTH 100*4
+#define WINDOW_HEIGHT 75*4
+#define GRID_WIDTH 100*2
+#define GRID_HEIGHT 75*2
+#define CELL_SIZE 2
 #define MOUSE_FORCE 0.5f
 #define MOUSE_RADIUS 50
+#define PRESSURE_ITERATIONS 100
+#define VISCOSITY_ITERATIONS 2
+#define TURBULENCE_AMOUNT 0.08f
+#define VORTICITY_STRENGTH 0.015f
+#define DENSITY_DECAY 0.998f
+#define TEMPERATURE_DECAY 0.998f
 
 typedef struct {
     float density;
@@ -26,6 +32,9 @@ Cell divergence_grid[GRID_WIDTH][GRID_HEIGHT];
 Cell pressure_grid[GRID_WIDTH][GRID_HEIGHT];
 int mouse_x = 0;
 int mouse_y = 0;
+int mouse_clicked = 0;
+int window_dragging = 0;
+float emission_density_amount = 0.25f;
 
 float random_float(float min, float max) {
     return min + ((float)rand() / RAND_MAX) * (max - min);
@@ -44,23 +53,25 @@ void init_grid() {
 
 void add_smoke(int x, int y) {
     if (x >= 0 && x < GRID_WIDTH && y >= 0 && y < GRID_HEIGHT) {
-        grid[x][y].density += 0.5f;
-        if (grid[x][y].density > 1.0f) grid[x][y].density = 1.0f;
-        grid[x][y].temperature = 1.0f;
+        grid[x][y].density += emission_density_amount;
+        grid[x][y].temperature = 1.0f + random_float(-0.1f, 0.1f);
+        if (grid[x][y].temperature < 0.5f) grid[x][y].temperature = 0.5f;
         grid[x][y].velocity_y = -0.5f + random_float(-0.1f, 0.1f);
         grid[x][y].velocity_x = random_float(-0.1f, 0.1f);
     }
 }
 
 void apply_mouse_force() {
+    if (!mouse_clicked && !window_dragging) return;
+    
     int grid_mouse_x = mouse_x / CELL_SIZE;
     int grid_mouse_y = mouse_y / CELL_SIZE;
     
     for (int x = 0; x < GRID_WIDTH; x++) {
         for (int y = 0; y < GRID_HEIGHT; y++) {
             if (grid[x][y].density > 0.1f) {
-                float dx = grid_mouse_x - x;
-                float dy = grid_mouse_y - y;
+                float dx = x - grid_mouse_x;
+                float dy = y - grid_mouse_y;
                 float distance = sqrtf(dx * dx + dy * dy);
                 
                 if (distance < MOUSE_RADIUS) {
@@ -75,21 +86,19 @@ void apply_mouse_force() {
     }
 }
 
-// Function to enforce boundary conditions
-// b = 0 for scalar (density, temp), 1 for vx, 2 for vy
 void set_bnd(int b, Cell field[GRID_WIDTH][GRID_HEIGHT]) {
     for (int i = 1; i < GRID_WIDTH - 1; i++) {
-        if (b == 1) { // vx
+        if (b == 1) {
             field[0][i].velocity_x = -field[1][i].velocity_x;
             field[GRID_WIDTH - 1][i].velocity_x = -field[GRID_WIDTH - 2][i].velocity_x;
-            field[i][0].velocity_x = field[i][1].velocity_x; // Tangential velocity copied
-            field[i][GRID_HEIGHT - 1].velocity_x = field[i][GRID_HEIGHT - 2].velocity_x; // Tangential velocity copied
-        } else if (b == 2) { // vy
+            field[i][0].velocity_x = field[i][1].velocity_x;
+            field[i][GRID_HEIGHT - 1].velocity_x = field[i][GRID_HEIGHT - 2].velocity_x;
+        } else if (b == 2) {
             field[i][0].velocity_y = -field[i][1].velocity_y;
             field[i][GRID_HEIGHT - 1].velocity_y = -field[i][GRID_HEIGHT - 2].velocity_y;
-            field[0][i].velocity_y = field[1][i].velocity_y; // Tangential velocity copied
-            field[GRID_WIDTH - 1][i].velocity_y = field[GRID_WIDTH - 2][i].velocity_y; // Tangential velocity copied
-        } else { // b == 0 for scalar (density, temp)
+            field[0][i].velocity_y = field[1][i].velocity_y;
+            field[GRID_WIDTH - 1][i].velocity_y = field[GRID_WIDTH - 2][i].velocity_y;
+        } else {
             field[i][0] = field[i][1];
             field[i][GRID_HEIGHT - 1] = field[i][GRID_HEIGHT - 2];
             field[0][i] = field[1][i];
@@ -97,8 +106,7 @@ void set_bnd(int b, Cell field[GRID_WIDTH][GRID_HEIGHT]) {
         }
     }
 
-    // Corners (average adjacent values)
-    if (b == 0) { // Scalar (density, temp)
+    if (b == 0) {
         field[0][0].density = (field[1][0].density + field[0][1].density) * 0.5f;
         field[0][GRID_HEIGHT - 1].density = (field[1][GRID_HEIGHT - 1].density + field[0][GRID_HEIGHT - 2].density) * 0.5f;
         field[GRID_WIDTH - 1][0].density = (field[GRID_WIDTH - 2][0].density + field[GRID_WIDTH - 1][1].density) * 0.5f;
@@ -109,13 +117,13 @@ void set_bnd(int b, Cell field[GRID_WIDTH][GRID_HEIGHT]) {
         field[GRID_WIDTH - 1][0].temperature = (field[GRID_WIDTH - 2][0].temperature + field[GRID_WIDTH - 1][1].temperature) * 0.5f;
         field[GRID_WIDTH - 1][GRID_HEIGHT - 1].temperature = (field[GRID_WIDTH - 2][GRID_HEIGHT - 1].temperature + field[GRID_WIDTH - 1][GRID_HEIGHT - 2].temperature) * 0.5f;
 
-    } else if (b == 1) { // vx
+    } else if (b == 1) {
         field[0][0].velocity_x = (field[1][0].velocity_x + field[0][1].velocity_x) * 0.5f;
         field[0][GRID_HEIGHT - 1].velocity_x = (field[1][GRID_HEIGHT - 1].velocity_x + field[0][GRID_HEIGHT - 2].velocity_x) * 0.5f;
         field[GRID_WIDTH - 1][0].velocity_x = (field[GRID_WIDTH - 2][0].velocity_x + field[GRID_WIDTH - 1][1].velocity_x) * 0.5f;
         field[GRID_WIDTH - 1][GRID_HEIGHT - 1].velocity_x = (field[GRID_WIDTH - 2][GRID_HEIGHT - 1].velocity_x + field[GRID_WIDTH - 1][GRID_HEIGHT - 2].velocity_x) * 0.5f;
 
-    } else if (b == 2) { // vy
+    } else if (b == 2) {
         field[0][0].velocity_y = (field[1][0].velocity_y + field[0][1].velocity_y) * 0.5f;
         field[0][GRID_HEIGHT - 1].velocity_y = (field[1][GRID_HEIGHT - 1].velocity_y + field[0][GRID_HEIGHT - 2].velocity_y) * 0.5f;
         field[GRID_WIDTH - 1][0].velocity_y = (field[GRID_WIDTH - 2][0].velocity_y + field[GRID_WIDTH - 1][1].velocity_y) * 0.5f;
@@ -134,8 +142,7 @@ void calculate_divergence() {
 }
 
 void solve_pressure() {
-    // Simple iterative solver (Jacobi or similar)
-    for (int iter = 0; iter < 40; iter++) { // Increased iterations for pressure solve
+    for (int iter = 0; iter < 40; iter++) {
         for (int x = 1; x < GRID_WIDTH - 1; x++) {
             for (int y = 1; y < GRID_HEIGHT - 1; y++) {
                 pressure_grid[x][y].density = 
@@ -158,13 +165,11 @@ void apply_pressure() {
     set_bnd(2, grid);
 }
 
-// Function to add turbulence (simple noise)
 void add_turbulence(float amount) {
     for (int x = 1; x < GRID_WIDTH - 1; x++) {
         for (int y = 1; y < GRID_HEIGHT - 1; y++) {
-            // Simple noise based on position and a changing factor
-            float noise_x = (float)(rand() % 201 - 100) / 100.0f; // Range -1 to 1
-            float noise_y = (float)(rand() % 201 - 100) / 100.0f; // Range -1 to 1
+            float noise_x = (float)(rand() % 201 - 100) / 100.0f;
+            float noise_y = (float)(rand() % 201 - 100) / 100.0f;
 
             grid[x][y].velocity_x += noise_x * amount;
             grid[x][y].velocity_y += noise_y * amount;
@@ -172,11 +177,8 @@ void add_turbulence(float amount) {
     }
 }
 
-// Function to apply viscosity
 void add_viscosity(float amount) {
-    // A simple diffusion step for velocity
-    // This is a simplified approach and a proper viscous solve is more complex
-    for (int iter = 0; iter < 4; iter++) { // Number of iterations for viscosity diffusion
+    for (int iter = 0; iter < 4; iter++) {
         for (int x = 1; x < GRID_WIDTH - 1; x++) {
             for (int y = 1; y < GRID_HEIGHT - 1; y++) {
                 grid[x][y].velocity_x = (
@@ -193,14 +195,47 @@ void add_viscosity(float amount) {
             }
         }
     }
-    set_bnd(1, grid); // Apply boundary conditions after viscosity for vx
-    set_bnd(2, grid); // Apply boundary conditions after viscosity for vy
+    set_bnd(1, grid);
+    set_bnd(2, grid);
+}
+
+void calculate_vorticity() {
+    for (int x = 1; x < GRID_WIDTH - 1; x++) {
+        for (int y = 1; y < GRID_HEIGHT - 1; y++) {
+            divergence_grid[x][y].density = 
+                (grid[x+1][y].velocity_y - grid[x-1][y].velocity_y) * 0.5f -
+                (grid[x][y+1].velocity_x - grid[x][y-1].velocity_x) * 0.5f;
+        }
+    }
+}
+
+void apply_vorticity_confinement(float strength) {
+    calculate_vorticity();
+
+    for (int x = 1; x < GRID_WIDTH - 1; x++) {
+        for (int y = 1; y < GRID_HEIGHT - 1; y++) {
+            float omega = divergence_grid[x][y].density;
+
+            float grad_omega_x = (fabs(divergence_grid[x+1][y].density) - fabs(divergence_grid[x-1][y].density)) * 0.5f;
+            float grad_omega_y = (fabs(divergence_grid[x][y+1].density) - fabs(divergence_grid[x][y-1].density)) * 0.5f;
+
+            float grad_omega_mag = sqrtf(grad_omega_x * grad_omega_x + grad_omega_y * grad_omega_y);
+
+            if (grad_omega_mag > 1e-6) {
+                float Nx = grad_omega_x / grad_omega_mag;
+                float Ny = grad_omega_y / grad_omega_mag;
+
+                float force_x = Ny * omega;
+                float force_y = -Nx * omega;
+
+                grid[x][y].velocity_x += force_x * strength;
+                grid[x][y].velocity_y += force_y * strength;
+            }
+        }
+    }
 }
 
 void update_simulation() {
-    // --- Fluid Simulation Update Cycle ---
-
-    // 1. Advection: Move quantities (density, velocity, temperature) based on current velocity
     for (int x = 0; x < GRID_WIDTH; x++) {
         for (int y = 0; y < GRID_HEIGHT; y++) {
             temp_grid[x][y] = grid[x][y];
@@ -215,13 +250,11 @@ void update_simulation() {
             float prev_x = x - vx;
             float prev_y = y - vy;
 
-            if (prev_x < 0.5f) prev_x = 0.5f;
-            if (prev_x > GRID_WIDTH - 1.5f) prev_x = GRID_WIDTH - 1.5f;
-            if (prev_y < 0.5f) prev_y = 0.5f;
-            if (prev_y > GRID_HEIGHT - 1.5f) prev_y = GRID_HEIGHT - 1.5f;
+            prev_x = fmaxf(0.5f, fminf(GRID_WIDTH - 1.5f, prev_x));
+            prev_y = fmaxf(0.5f, fminf(GRID_HEIGHT - 1.5f, prev_y));
 
-            int x0 = floor(prev_x);
-            int y0 = floor(prev_y);
+            int x0 = (int)prev_x;
+            int y0 = (int)prev_y;
             int x1 = x0 + 1;
             int y1 = y0 + 1;
 
@@ -243,60 +276,52 @@ void update_simulation() {
                                   s1 * (t0 * temp_grid[x1][y0].velocity_y + t1 * temp_grid[x1][y1].velocity_y);
         }
     }
-    set_bnd(0, grid); // Apply boundary conditions for density and temp after advection
-    set_bnd(1, grid); // Apply boundary conditions for vx after advection
-    set_bnd(2, grid); // Apply boundary conditions for vy after advection
+    set_bnd(0, grid);
+    set_bnd(1, grid);
+    set_bnd(2, grid);
 
-    // 2. Add External Forces (buoyancy, mouse)
     for (int x = 1; x < GRID_WIDTH - 1; x++) {
         for (int y = 1; y < GRID_HEIGHT - 1; y++) {
-            // Buoyancy force based on temperature and density
-            grid[x][y].velocity_y -= grid[x][y].density * grid[x][y].temperature * 0.2f;
+            grid[x][y].velocity_y -= grid[x][y].density * grid[x][y].temperature * 0.15f;
         }
     }
     apply_mouse_force();
 
-    // 3. Add Turbulence
-    add_turbulence(0.05f);
+    add_turbulence(TURBULENCE_AMOUNT);
 
-    set_bnd(1, grid); // Apply boundary conditions for vx after forces and turbulence
-    set_bnd(2, grid); // Apply boundary conditions for vy after forces and turbulence
+    apply_vorticity_confinement(VORTICITY_STRENGTH);
 
-    // 4. Apply Viscosity
-     for (int x = 0; x < GRID_WIDTH; x++) {
-        for (int y = 0; y < GRID_HEIGHT; y++) {
-            temp_grid[x][y] = grid[x][y];
-        }
-    }
-    for (int iter = 0; iter < 4; iter++) { // Iterations for viscosity diffusion
+    set_bnd(1, grid);
+    set_bnd(2, grid);
+
+    for (int iter = 0; iter < VISCOSITY_ITERATIONS; iter++) {
         for (int x = 1; x < GRID_WIDTH - 1; x++) {
             for (int y = 1; y < GRID_HEIGHT - 1; y++) {
                 grid[x][y].velocity_x = (
-                    temp_grid[x][y].velocity_x + 
-                    0.01f * (grid[x-1][y].velocity_x + grid[x+1][y].velocity_x +
+                    grid[x][y].velocity_x + 
+                    0.008f * (grid[x-1][y].velocity_x + grid[x+1][y].velocity_x +
                               grid[x][y-1].velocity_x + grid[x][y+1].velocity_x))
-                    / (1 + 4 * 0.01f);
+                    / (1 + 4 * 0.008f);
 
                 grid[x][y].velocity_y = (
-                    temp_grid[x][y].velocity_y + 
-                    0.01f * (grid[x-1][y].velocity_y + grid[x+1][y].velocity_y +
+                    grid[x][y].velocity_y + 
+                    0.008f * (grid[x-1][y].velocity_y + grid[x+1][y].velocity_y +
                               grid[x][y-1].velocity_y + grid[x][y+1].velocity_y))
-                    / (1 + 4 * 0.01f);
+                    / (1 + 4 * 0.008f);
             }
         }
-        set_bnd(1, grid); // Apply boundary conditions after viscosity iteration
-        set_bnd(2, grid); // Apply boundary conditions after viscosity iteration
+        set_bnd(1, grid);
+        set_bnd(2, grid);
     }
 
-    // 5. Project (make velocity divergence-free using pressure)
     for (int x = 0; x < GRID_WIDTH; x++) {
         for (int y = 0; y < GRID_HEIGHT; y++) {
-            pressure_grid[x][y].density = 0.0f; // Initialize pressure grid to zero
+            pressure_grid[x][y].density = 0.0f;
         }
     }
     calculate_divergence();
 
-    for (int iter = 0; iter < 40; iter++) { // Iterations for pressure solve
+    for (int iter = 0; iter < PRESSURE_ITERATIONS; iter++) {
         for (int x = 1; x < GRID_WIDTH - 1; x++) {
             for (int y = 1; y < GRID_HEIGHT - 1; y++) {
                 pressure_grid[x][y].density = 
@@ -305,22 +330,21 @@ void update_simulation() {
                      divergence_grid[x][y].density) * 0.25f;
             }
         }
-        set_bnd(0, pressure_grid); // Apply boundary conditions for pressure after iteration
+        set_bnd(0, pressure_grid);
     }
 
     apply_pressure();
-    set_bnd(1, grid); // Apply boundary conditions for vx after pressure solve
-    set_bnd(2, grid); // Apply boundary conditions for vy after pressure solve
+    set_bnd(1, grid);
+    set_bnd(2, grid);
 
-    // 6. Dissipation
     for (int x = 0; x < GRID_WIDTH; x++) {
         for (int y = 0; y < GRID_HEIGHT; y++) {
-            grid[x][y].density *= 0.998f;
-            grid[x][y].temperature *= 0.998f;
+            grid[x][y].density *= DENSITY_DECAY;
+            grid[x][y].temperature *= TEMPERATURE_DECAY;
         }
     }
 
-    add_viscosity(0.05f); // Further increased viscosity amount
+    add_viscosity(0.05f);
 }
 
 void render_simulation(SDL_Renderer* renderer) {
@@ -329,15 +353,23 @@ void render_simulation(SDL_Renderer* renderer) {
 
     for (int x = 0; x < GRID_WIDTH; x++) {
         for (int y = 0; y < GRID_HEIGHT; y++) {
-            if (grid[x][y].density > 0.01f) {
+            if (grid[x][y].density > 0.005f) {
+                float density = grid[x][y].density;
                 float temp = grid[x][y].temperature;
-                int alpha = (int)(grid[x][y].density * 255);
-                if (alpha > 255) alpha = 255;
                 
-                // Color based on temperature
-                int r = (int)(200 + temp * 55);
-                int g = (int)(200 + temp * 55);
-                int b = (int)(200 + temp * 55);
+                float heat = temp * temp;
+                float intensity = density * density;
+                
+                int r = (int)((heat * 255 + intensity * 100) * (1.0f + sinf(temp * 3.14159f) * 0.1f));
+                int g = (int)((heat * 200 + intensity * 50) * (1.0f + sinf(temp * 2.0f) * 0.1f));
+                int b = (int)((heat * 50 + intensity * 10) * (1.0f + sinf(temp * 1.5f) * 0.1f));
+
+                r = fminf(255, fmaxf(0, r));
+                g = fminf(255, fmaxf(0, g));
+                b = fminf(255, fmaxf(0, b));
+
+                int alpha = (int)(pow(density, 0.7f) * (150 + temp * 100));
+                alpha = fminf(255, fmaxf(0, alpha));
                 
                 SDL_SetRenderDrawColor(renderer, r, g, b, alpha);
                 SDL_Rect rect = {
@@ -397,13 +429,52 @@ int main(int argc, char* argv[]) {
             else if (e.type == SDL_MOUSEMOTION) {
                 mouse_x = e.motion.x;
                 mouse_y = e.motion.y;
+                if (e.motion.state & SDL_BUTTON_LMASK) {
+                    window_dragging = 1;
+                }
+            }
+            else if (e.type == SDL_MOUSEBUTTONDOWN) {
+                if (e.button.button == SDL_BUTTON_LEFT) {
+                    mouse_clicked = 1;
+                }
+            }
+            else if (e.type == SDL_MOUSEBUTTONUP) {
+                if (e.button.button == SDL_BUTTON_LEFT) {
+                    mouse_clicked = 0;
+                    window_dragging = 0;
+                }
+            }
+            else if (e.type == SDL_KEYDOWN) {
+                switch (e.key.keysym.sym) {
+                    case SDLK_UP:
+                        emission_density_amount += 0.05f;
+                        if (emission_density_amount > 1.0f) emission_density_amount = 1.0f;
+                        break;
+                    case SDLK_DOWN:
+                        emission_density_amount -= 0.05f;
+                        if (emission_density_amount < 0.0f) emission_density_amount = 0.0f;
+                        break;
+                }
             }
         }
         
-        // Add smoke from multiple points for a more natural look
-        add_smoke(GRID_WIDTH / 2, GRID_HEIGHT - 2);
-        add_smoke(GRID_WIDTH / 2 - 1, GRID_HEIGHT - 2);
-        add_smoke(GRID_WIDTH / 2 + 1, GRID_HEIGHT - 2);
+        // Candle base
+        for (int i = -3; i <= 3; i++) {
+            add_smoke(GRID_WIDTH / 2 + i, GRID_HEIGHT - 2);
+        }
+        
+        // Candle middle
+        for (int i = -2; i <= 2; i++) {
+            add_smoke(GRID_WIDTH / 2 + i, GRID_HEIGHT - 3);
+        }
+        
+        // Candle top
+        for (int i = -1; i <= 1; i++) {
+            add_smoke(GRID_WIDTH / 2 + i, GRID_HEIGHT - 4);
+        }
+        
+        // Candle tip
+        add_smoke(GRID_WIDTH / 2, GRID_HEIGHT - 5);
         
         update_simulation();
         render_simulation(renderer);
